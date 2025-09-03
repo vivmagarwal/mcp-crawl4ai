@@ -14,7 +14,7 @@ from pathlib import Path
 import hashlib
 import tempfile
 
-from fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP, Context
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -86,8 +86,6 @@ async def crawl4ai_lifespan(server: FastMCP) -> AsyncIterator[Crawl4AIContext]:
 
 # Initialize FastMCP server
 mcp = FastMCP("mcp-crawl4ai")
-mcp.description = "Comprehensive MCP server for Crawl4AI web scraping"
-mcp.lifespan = crawl4ai_lifespan
 
 # Helper functions
 def generate_content_hash(content: str) -> str:
