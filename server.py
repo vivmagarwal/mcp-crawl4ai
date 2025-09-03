@@ -216,7 +216,7 @@ async def crawl_url(
             word_count_threshold=word_count_threshold,
             exclude_external_links=exclude_external_links,
             exclude_social_media_links=exclude_social_media_links,
-            js_script=js_script,
+            js_code=js_script,  # Changed from js_script to js_code
         )
         
         # Perform the crawl
@@ -383,7 +383,7 @@ async def crawl_with_auth(
         
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            js_script=js_script,
+            js_code=js_script,  # Changed from js_script to js_code
             wait_for=content_selector,
             word_count_threshold=10,
             screenshot=True  # Take screenshot to verify login worked
@@ -1140,9 +1140,9 @@ async def crawl_with_js_execution(
         
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            js_script=js_code,
-            wait_for_js=wait_for_js,
-            js_timeout=js_timeout
+            js_code=js_code,  # Fixed parameter name
+            wait_for=wait_for_js,  # Changed from wait_for_js to wait_for
+            page_timeout=js_timeout  # Changed from js_timeout to page_timeout
         )
         
         result = await crawler.arun(url=url, config=config)
@@ -1213,7 +1213,7 @@ async def crawl_dynamic_content(
         
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            js_script=js_script,
+            js_code=js_script,  # Fixed parameter name
             wait_for=wait_for_selector,
             word_count_threshold=10
         )
