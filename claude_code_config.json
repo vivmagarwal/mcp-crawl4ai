@@ -1,0 +1,70 @@
+{
+  "name": "mcp-crawl4ai",
+  "description": "Comprehensive web crawling and scraping with Crawl4AI",
+  "tools": [
+    {
+      "name": "crawl_url",
+      "description": "Crawl a single URL with advanced options including screenshots, PDFs, and JS execution"
+    },
+    {
+      "name": "batch_crawl",
+      "description": "Crawl multiple URLs in parallel with memory management"
+    },
+    {
+      "name": "deep_crawl",
+      "description": "Recursively crawl websites with BFS, DFS, or best-first strategies"
+    },
+    {
+      "name": "extract_structured_data",
+      "description": "Extract structured data using CSS selectors or regular expressions"
+    },
+    {
+      "name": "extract_with_llm",
+      "description": "Use LLMs to extract semantic information from web pages"
+    },
+    {
+      "name": "crawl_with_filter",
+      "description": "Crawl with content filtering (BM25, pruning, or LLM-based)"
+    },
+    {
+      "name": "extract_links",
+      "description": "Extract and preview all links from a webpage"
+    },
+    {
+      "name": "crawl_with_js_execution",
+      "description": "Crawl pages with custom JavaScript execution"
+    },
+    {
+      "name": "crawl_dynamic_content",
+      "description": "Handle dynamically loaded content with scrolling"
+    },
+    {
+      "name": "get_crawled_content",
+      "description": "Retrieve previously crawled content by ID"
+    },
+    {
+      "name": "list_crawled_content",
+      "description": "List all crawled content in the current session"
+    }
+  ],
+  "capabilities": {
+    "browser_rendering": true,
+    "javascript_execution": true,
+    "screenshot_capture": true,
+    "pdf_generation": true,
+    "parallel_processing": true,
+    "content_filtering": true,
+    "llm_extraction": true,
+    "deep_crawling": true,
+    "dynamic_content": true,
+    "structured_extraction": true
+  },
+  "requirements": {
+    "python": ">=3.10",
+    "dependencies": [
+      "mcp>=1.7.0",
+      "crawl4ai>=0.6.0",
+      "playwright"
+    ]
+  }
+}

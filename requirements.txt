@@ -1,0 +1,11 @@
+# Core dependencies
+mcp>=1.7.0
+crawl4ai>=0.6.0
+httpx>=0.25.0
+python-dotenv>=1.0.0
+
+# Optional dependencies for development
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+ruff>=0.1.0
