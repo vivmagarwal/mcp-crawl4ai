@@ -9,21 +9,18 @@ import json
 import asyncio
 from typing import Dict, Any, List, Optional, Union
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
 import tempfile
 
-from mcp.server.fastmcp import FastMCP, Context
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
+from mcp.server.fastmcp import FastMCP
 
 from crawl4ai import (
     AsyncWebCrawler, 
     BrowserConfig, 
     CrawlerRunConfig,
     CacheMode,
-    MemoryAdaptiveDispatcher,
     LLMExtractionStrategy,
     JsonCssExtractionStrategy,
     CosineStrategy,
@@ -47,42 +44,38 @@ try:
 except ImportError:
     DEEP_CRAWLING_AVAILABLE = False
 
-# Data storage context
-@dataclass
-class Crawl4AIContext:
-    """Context for the Crawl4AI MCP server"""
-    crawler: Optional[AsyncWebCrawler] = None
-    cache_dir: Path = None
-    crawled_data: Dict[str, Any] = None
+# Global storage for crawled data
+CRAWLED_DATA: Dict[str, Any] = {}
+CACHE_DIR = Path(tempfile.gettempdir()) / "mcp-crawl4ai-cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
-    def __post_init__(self):
-        self.crawled_data = {}
-        self.cache_dir = Path(tempfile.gettempdir()) / "mcp-crawl4ai-cache"
-        self.cache_dir.mkdir(exist_ok=True)
+# Global crawler instance
+CRAWLER_INSTANCE: Optional[AsyncWebCrawler] = None
 
-@asynccontextmanager
-async def crawl4ai_lifespan(server: FastMCP) -> AsyncIterator[Crawl4AIContext]:
-    """
-    Manages the Crawl4AI crawler lifecycle
-    """
-    # Create browser configuration
-    browser_config = BrowserConfig(
-        headless=True,
-        verbose=False,
-        browser_type="chromium",  # Can be "chromium", "firefox", or "webkit"
-    )
+async def get_crawler() -> AsyncWebCrawler:
+    """Get or create the global crawler instance"""
+    global CRAWLER_INSTANCE
     
-    # Initialize the crawler
-    crawler = AsyncWebCrawler(config=browser_config)
-    await crawler.__aenter__()
+    if CRAWLER_INSTANCE is None:
+        browser_config = BrowserConfig(
+            headless=True,
+            verbose=False,
+            browser_type="chromium",
+        )
+        CRAWLER_INSTANCE = AsyncWebCrawler(config=browser_config)
+        await CRAWLER_INSTANCE.__aenter__()
     
-    context = Crawl4AIContext(crawler=crawler)
-    
-    try:
-        yield context
-    finally:
-        # Clean up crawler
-        await crawler.__aexit__(None, None, None)
+    return CRAWLER_INSTANCE
+
+async def cleanup_crawler():
+    """Clean up the global crawler instance"""
+    global CRAWLER_INSTANCE
+    if CRAWLER_INSTANCE is not None:
+        try:
+            await CRAWLER_INSTANCE.__aexit__(None, None, None)
+        except:
+            pass
+        CRAWLER_INSTANCE = None
 
 # Initialize FastMCP server
 mcp = FastMCP("mcp-crawl4ai")
@@ -92,19 +85,19 @@ def generate_content_hash(content: str) -> str:
     """Generate a hash for content to use as identifier"""
     return hashlib.md5(content.encode()).hexdigest()[:12]
 
-def save_crawled_content(context: Crawl4AIContext, url: str, content: Any) -> str:
+def save_crawled_content(url: str, content: Any) -> str:
     """Save crawled content and return its ID"""
     content_id = generate_content_hash(str(content))
-    context.crawled_data[content_id] = {
+    CRAWLED_DATA[content_id] = {
         "url": url,
         "content": content,
         "timestamp": asyncio.get_event_loop().time()
     }
     
     # Also save to disk cache
-    cache_file = context.cache_dir / f"{content_id}.json"
+    cache_file = CACHE_DIR / f"{content_id}.json"
     with open(cache_file, "w") as f:
-        json.dump(context.crawled_data[content_id], f, indent=2, default=str)
+        json.dump(CRAWLED_DATA[content_id], f, indent=2, default=str)
     
     return content_id
 
@@ -112,7 +105,6 @@ def save_crawled_content(context: Crawl4AIContext, url: str, content: Any) -> st
 
 @mcp.tool()
 async def crawl_url(
-    ctx: Context, 
     url: str,
     wait_for: Optional[str] = None,
     screenshot: bool = False,
@@ -125,9 +117,9 @@ async def crawl_url(
     username: Optional[str] = None,
     password: Optional[str] = None,
     login_url: Optional[str] = None,
-    username_selector: str = 'input[type="text"], input[type="email"], input[name*="user"], input[name*="email"]',
-    password_selector: str = 'input[type="password"]',
-    submit_selector: str = 'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Sign in")'
+    username_selector: str = "input[type='text'], input[type='email'], input[name*='user'], input[name*='email']",
+    password_selector: str = "input[type='password']",
+    submit_selector: str = "button[type='submit'], input[type='submit'], button:has-text('Login'), button:has-text('Sign in')"
 ) -> str:
     """
     Crawl a single URL with comprehensive options and authentication support
@@ -153,101 +145,113 @@ async def crawl_url(
         JSON with crawled content, metadata, and content ID
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # Handle authentication if credentials provided
-        js_script = None
+        # Prepare JS code for authentication if credentials provided
+        js_code = None
         if username and password:
-            # Create login script
-            js_script = f"""
-            async function login() {{
-                // If we need to navigate to login page first
-                const currentUrl = window.location.href;
-                const loginUrl = '{login_url or url}';
+            js_code = f"""
+            (async () => {{
+                // Wait for login form
+                await new Promise(r => setTimeout(r, 1000));
                 
-                if (loginUrl !== currentUrl && !currentUrl.includes('login')) {{
-                    window.location.href = loginUrl;
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+                // Find and fill username
+                const userInput = document.querySelector('{username_selector}');
+                if (userInput) {{
+                    userInput.value = '{username}';
+                    userInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 }}
                 
-                // Find and fill username field
-                const usernameField = document.querySelector('{username_selector}');
-                if (usernameField) {{
-                    usernameField.value = '{username}';
-                    usernameField.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                // Find and fill password
+                const passInput = document.querySelector('{password_selector}');
+                if (passInput) {{
+                    passInput.value = '{password}';
+                    passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 }}
                 
-                // Find and fill password field
-                const passwordField = document.querySelector('{password_selector}');
-                if (passwordField) {{
-                    passwordField.value = '{password}';
-                    passwordField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                }}
-                
-                // Submit the form
-                await new Promise(resolve => setTimeout(resolve, 500));
-                const submitButton = document.querySelector('{submit_selector}');
-                if (submitButton) {{
-                    submitButton.click();
+                // Submit form
+                await new Promise(r => setTimeout(r, 500));
+                const submitBtn = document.querySelector('{submit_selector}');
+                if (submitBtn) {{
+                    submitBtn.click();
                 }} else {{
-                    // Try to find form and submit it
-                    const form = passwordField ? passwordField.closest('form') : document.querySelector('form');
+                    // Try to submit the form directly
+                    const form = userInput ? userInput.closest('form') : null;
                     if (form) form.submit();
                 }}
                 
                 // Wait for navigation
-                await new Promise(resolve => setTimeout(resolve, 5000));
-            }}
-            
-            await login();
+                await new Promise(r => setTimeout(r, 3000));
+            }})();
             """
+        
+        # Navigate to login URL first if provided
+        if login_url and username and password:
+            # First, navigate to login page and authenticate
+            login_config = CrawlerRunConfig(
+                js_code=js_code,
+                wait_for=wait_for or "body",
+                remove_overlay_elements=remove_overlay,
+                cache_mode=CacheMode.BYPASS if bypass_cache else CacheMode.ENABLED,
+                word_count_threshold=word_count_threshold,
+                exclude_external_links=exclude_external_links,
+                exclude_social_media_links=exclude_social_media_links,
+                screenshot=False,
+                pdf=False,
+                verbose=True
+            )
+            
+            await crawler.arun(
+                url=login_url,
+                config=login_config
+            )
+            
+            # Now navigate to the actual URL
+            js_code = None  # Don't run auth code again
         
         # Configure the crawl
         config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS if bypass_cache else CacheMode.ENABLED,
-            wait_for=wait_for,
-            screenshot=screenshot,
-            pdf=pdf,
+            js_code=js_code,
+            wait_for=wait_for or "body",
             remove_overlay_elements=remove_overlay,
+            cache_mode=CacheMode.BYPASS if bypass_cache else CacheMode.ENABLED,
             word_count_threshold=word_count_threshold,
             exclude_external_links=exclude_external_links,
             exclude_social_media_links=exclude_social_media_links,
-            js_code=js_script,  # Changed from js_script to js_code
+            screenshot=screenshot,
+            pdf=pdf,
+            verbose=True,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
         # Perform the crawl
-        result = await crawler.arun(url=url, config=config)
+        result = await crawler.arun(
+            url=url,
+            config=config
+        )
         
         if result.success:
-            # Save the content
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            # Save the crawled content
+            content_id = save_crawled_content(url, result)
             
             response = {
                 "success": True,
-                "content_id": content_id,
                 "url": url,
+                "content_id": content_id,
                 "title": result.metadata.get("title", ""),
+                "description": result.metadata.get("description", ""),
                 "markdown": result.markdown[:1000] + "..." if len(result.markdown) > 1000 else result.markdown,
-                "html_length": len(result.html) if result.html else 0,
-                "markdown_length": len(result.markdown) if result.markdown else 0,
-                "media": result.media if result.media else {},
-                "links": {
-                    "internal": len(result.links.get("internal", [])),
-                    "external": len(result.links.get("external", []))
-                },
-                "metadata": result.metadata,
+                "word_count": len(result.markdown.split()),
+                "links_count": len(result.links.get("internal", [])) + len(result.links.get("external", [])),
+                "metadata": result.metadata
             }
             
-            if screenshot and result.screenshot_data:
-                response["screenshot_available"] = True
-                
-            if pdf and result.pdf_data:
-                response["pdf_available"] = True
-                
+            if screenshot and result.screenshot_base64:
+                response["screenshot"] = result.screenshot_base64[:100] + "..."
+            
+            if pdf and result.pdf_base64:
+                response["pdf"] = result.pdf_base64[:100] + "..."
+            
             return json.dumps(response, indent=2)
         else:
             return json.dumps({
@@ -263,7 +267,6 @@ async def crawl_url(
 
 @mcp.tool()
 async def crawl_with_auth(
-    ctx: Context,
     url: str,
     username: str,
     password: str,
@@ -286,129 +289,138 @@ async def crawl_with_auth(
         JSON with crawled content from authenticated session
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # Create enhanced login script
-        js_script = f"""
-        async function authenticateAndNavigate() {{
-            // Navigate to login page if needed
-            const targetUrl = '{url}';
-            const loginPageUrl = '{login_url or url}';
+        # Use login_url if provided, otherwise use the main URL
+        auth_url = login_url or url
+        
+        # JavaScript to perform login
+        login_js = f"""
+        (async () => {{
+            console.log('Starting authentication...');
             
-            if (!window.location.href.includes('login') && loginPageUrl !== window.location.href) {{
-                window.location.href = loginPageUrl;
-                await new Promise(resolve => setTimeout(resolve, 3000));
-            }}
+            // Wait for page to load
+            await new Promise(r => setTimeout(r, 2000));
             
-            // Try multiple selector strategies for username
-            const usernameSelectors = [
+            // Try multiple selectors for username field
+            const userSelectors = [
                 'input[type="email"]',
-                'input[type="text"][name*="user"]',
-                'input[type="text"][name*="email"]',
-                'input[name="username"]',
+                'input[type="text"]',
+                'input[name*="user"]',
+                'input[name*="email"]',
                 'input[id*="user"]',
-                '#username'
+                'input[id*="email"]',
+                '#username',
+                '#email'
             ];
             
-            let usernameField = null;
-            for (const selector of usernameSelectors) {{
-                usernameField = document.querySelector(selector);
-                if (usernameField && usernameField.offsetParent !== null) break;
+            let userInput = null;
+            for (const selector of userSelectors) {{
+                userInput = document.querySelector(selector);
+                if (userInput) break;
             }}
             
-            if (usernameField) {{
-                usernameField.focus();
-                usernameField.value = '{username}';
-                usernameField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                usernameField.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            if (userInput) {{
+                userInput.focus();
+                userInput.value = '{username}';
+                userInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                userInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                console.log('Username entered');
             }}
             
-            // Try multiple selector strategies for password
-            const passwordField = document.querySelector('input[type="password"]');
-            if (passwordField) {{
-                await new Promise(resolve => setTimeout(resolve, 500));
-                passwordField.focus();
-                passwordField.value = '{password}';
-                passwordField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                passwordField.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            // Find password field
+            const passInput = document.querySelector('input[type="password"]');
+            if (passInput) {{
+                passInput.focus();
+                passInput.value = '{password}';
+                passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                console.log('Password entered');
             }}
             
-            // Try multiple submit strategies
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Wait a bit
+            await new Promise(r => setTimeout(r, 1000));
             
+            // Try multiple selectors for submit button
             const submitSelectors = [
                 'button[type="submit"]',
                 'input[type="submit"]',
-                'button:contains("Login")',
-                'button:contains("Sign in")',
-                'button:contains("Log in")',
+                'button:has-text("Login")',
+                'button:has-text("Sign in")',
+                'button:has-text("Submit")',
                 '.login-button',
                 '#login-button'
             ];
             
             let submitted = false;
             for (const selector of submitSelectors) {{
-                const button = document.querySelector(selector);
-                if (button && button.offsetParent !== null) {{
-                    button.click();
+                const submitBtn = document.querySelector(selector);
+                if (submitBtn) {{
+                    submitBtn.click();
                     submitted = true;
+                    console.log('Form submitted via button');
                     break;
                 }}
             }}
             
-            if (!submitted && passwordField) {{
-                const form = passwordField.closest('form');
+            // If no button found, try submitting the form
+            if (!submitted && userInput) {{
+                const form = userInput.closest('form');
                 if (form) {{
                     form.submit();
-                    submitted = true;
+                    console.log('Form submitted directly');
                 }}
             }}
             
-            // Wait for login to complete
-            await new Promise(resolve => setTimeout(resolve, {wait_after_login}));
-            
-            // Navigate to target URL if different from current
-            if (targetUrl !== loginPageUrl && !window.location.href.includes(targetUrl)) {{
-                window.location.href = targetUrl;
-                await new Promise(resolve => setTimeout(resolve, 3000));
-            }}
-        }}
-        
-        await authenticateAndNavigate();
+            // Wait for navigation
+            await new Promise(r => setTimeout(r, {wait_after_login}));
+            console.log('Authentication complete');
+        }})();
         """
         
-        config = CrawlerRunConfig(
+        # First crawl with authentication
+        auth_config = CrawlerRunConfig(
+            js_code=login_js,
+            wait_for=content_selector or "body",
+            remove_overlay_elements=True,
             cache_mode=CacheMode.BYPASS,
-            js_code=js_script,  # Changed from js_script to js_code
-            wait_for=content_selector,
-            word_count_threshold=10,
-            screenshot=True  # Take screenshot to verify login worked
+            verbose=True
         )
         
-        result = await crawler.arun(url=url, config=config)
+        # Perform login
+        if auth_url != url:
+            await crawler.arun(url=auth_url, config=auth_config)
+            
+            # Then navigate to target URL
+            config = CrawlerRunConfig(
+                wait_for=content_selector or "body",
+                remove_overlay_elements=True,
+                cache_mode=CacheMode.BYPASS,
+                verbose=True,
+                markdown_generator=DefaultMarkdownGenerator()
+            )
+            result = await crawler.arun(url=url, config=config)
+        else:
+            # Login and crawl in one go
+            result = await crawler.arun(url=auth_url, config=auth_config)
         
         if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            content_id = save_crawled_content(url, result)
             
             return json.dumps({
                 "success": True,
                 "url": url,
-                "authenticated": True,
                 "content_id": content_id,
+                "authenticated": True,
                 "title": result.metadata.get("title", ""),
-                "content_length": len(result.markdown) if result.markdown else 0,
-                "screenshot_taken": bool(result.screenshot_data),
-                "message": "Successfully crawled with authentication"
+                "markdown": result.markdown[:1000] + "..." if len(result.markdown) > 1000 else result.markdown,
+                "word_count": len(result.markdown.split()),
+                "metadata": result.metadata
             }, indent=2)
         else:
             return json.dumps({
                 "success": False,
-                "error": result.error_message or "Authentication crawl failed",
-                "tip": "Check login credentials and selectors"
+                "error": result.error_message or "Authentication or crawl failed"
             }, indent=2)
             
     except Exception as e:
@@ -419,7 +431,6 @@ async def crawl_with_auth(
 
 @mcp.tool()
 async def batch_crawl(
-    ctx: Context,
     urls: List[str],
     max_concurrent: int = 5,
     bypass_cache: bool = False,
@@ -438,56 +449,59 @@ async def batch_crawl(
         JSON with results for all URLs
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
         config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS if bypass_cache else CacheMode.ENABLED,
             word_count_threshold=word_count_threshold,
+            verbose=False,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
-        # Create dispatcher for memory management
-        dispatcher = MemoryAdaptiveDispatcher(
-            memory_threshold_percent=70.0,
-            check_interval=1.0,
-            max_session_permit=max_concurrent
-        )
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(max_concurrent)
         
-        # Crawl all URLs
-        results = await crawler.arun_many(
-            urls=urls,
-            config=config,
-            dispatcher=dispatcher
-        )
+        async def crawl_single(url: str) -> Dict[str, Any]:
+            async with semaphore:
+                try:
+                    result = await crawler.arun(url=url, config=config)
+                    
+                    if result.success:
+                        content_id = save_crawled_content(url, result)
+                        return {
+                            "url": url,
+                            "success": True,
+                            "content_id": content_id,
+                            "title": result.metadata.get("title", ""),
+                            "word_count": len(result.markdown.split())
+                        }
+                    else:
+                        return {
+                            "url": url,
+                            "success": False,
+                            "error": result.error_message or "Crawl failed"
+                        }
+                except Exception as e:
+                    return {
+                        "url": url,
+                        "success": False,
+                        "error": str(e)
+                    }
         
-        crawl_results = []
-        for result in results:
-            if result.success:
-                content_id = save_crawled_content(
-                    ctx.request_context.lifespan_context,
-                    result.url,
-                    result
-                )
-                
-                crawl_results.append({
-                    "url": result.url,
-                    "success": True,
-                    "content_id": content_id,
-                    "title": result.metadata.get("title", ""),
-                    "content_length": len(result.markdown) if result.markdown else 0,
-                })
-            else:
-                crawl_results.append({
-                    "url": result.url,
-                    "success": False,
-                    "error": result.error_message
-                })
+        # Crawl all URLs concurrently
+        tasks = [crawl_single(url) for url in urls]
+        results = await asyncio.gather(*tasks)
+        
+        # Summary statistics
+        successful = sum(1 for r in results if r["success"])
+        failed = len(results) - successful
         
         return json.dumps({
             "success": True,
             "total_urls": len(urls),
-            "successful": sum(1 for r in crawl_results if r["success"]),
-            "failed": sum(1 for r in crawl_results if not r["success"]),
-            "results": crawl_results
+            "successful": successful,
+            "failed": failed,
+            "results": results
         }, indent=2)
         
     except Exception as e:
@@ -496,68 +510,8 @@ async def batch_crawl(
             "error": str(e)
         }, indent=2)
 
-async def simple_deep_crawl(ctx, start_url, max_depth, max_pages, allowed_domains=None, exclude_patterns=None, include_patterns=None):
-    """Simple deep crawl implementation without advanced strategies"""
-    crawler = ctx.request_context.lifespan_context.crawler
-    config = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        word_count_threshold=10,
-    )
-    
-    crawled_urls = []
-    visited = set()
-    to_visit = [(start_url, 0)]
-    
-    while to_visit and len(crawled_urls) < max_pages:
-        url, depth = to_visit.pop(0)
-        
-        if url in visited or depth > max_depth:
-            continue
-        
-        # Apply domain filter
-        if allowed_domains:
-            from urllib.parse import urlparse
-            domain = urlparse(url).netloc
-            if domain not in allowed_domains:
-                continue
-        
-        visited.add(url)
-        
-        result = await crawler.arun(url=url, config=config)
-        
-        if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
-            
-            crawled_urls.append({
-                "url": url,
-                "depth": depth,
-                "content_id": content_id,
-                "title": result.metadata.get("title", ""),
-                "links_found": len(result.links.get("internal", []))
-            })
-            
-            # Add internal links to queue
-            for link in result.links.get("internal", []):
-                link_url = link.get("href", "")
-                if link_url and link_url not in visited:
-                    to_visit.append((link_url, depth + 1))
-    
-    return json.dumps({
-        "success": True,
-        "start_url": start_url,
-        "strategy": "simple_bfs",
-        "pages_crawled": len(crawled_urls),
-        "max_depth_reached": max(c["depth"] for c in crawled_urls) if crawled_urls else 0,
-        "results": crawled_urls
-    }, indent=2)
-
 @mcp.tool()
 async def deep_crawl(
-    ctx: Context,
     start_url: str,
     max_depth: int = 3,
     max_pages: int = 100,
@@ -583,100 +537,71 @@ async def deep_crawl(
     Returns:
         JSON with deep crawl results
     """
+    if not DEEP_CRAWLING_AVAILABLE:
+        return json.dumps({
+            "success": False,
+            "error": "Deep crawling features not available. Please install crawl4ai with deep crawling support."
+        }, indent=2)
+    
     try:
-        if not DEEP_CRAWLING_AVAILABLE:
-            # Simple fallback implementation without deep crawling strategies
-            return await simple_deep_crawl(ctx, start_url, max_depth, max_pages, allowed_domains, exclude_patterns, include_patterns)
-            
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # Select crawling strategy
-        if strategy == "dfs":
-            crawl_strategy = DFSDeepCrawlStrategy(
-                max_depth=max_depth,
-                max_pages=max_pages
-            )
-        elif strategy == "best_first" and keyword_focus:
-            scorer = KeywordRelevanceScorer(keywords=keyword_focus)
-            crawl_strategy = BestFirstCrawlingStrategy(
-                scorer=scorer,
-                max_depth=max_depth,
-                max_pages=max_pages
-            )
-        else:  # Default to BFS
-            crawl_strategy = BFSDeepCrawlStrategy(
-                max_depth=max_depth,
-                max_pages=max_pages
-            )
-        
-        # Add filters
+        # Set up filters
         filters = []
         if allowed_domains:
             filters.append(DomainFilter(allowed_domains=allowed_domains))
         if exclude_patterns:
-            for pattern in exclude_patterns:
-                filters.append(URLPatternFilter(exclude_patterns=[pattern]))
+            filters.append(URLPatternFilter(exclude_patterns=exclude_patterns))
         if include_patterns:
-            for pattern in include_patterns:
-                filters.append(URLPatternFilter(include_patterns=[pattern]))
+            filters.append(URLPatternFilter(include_patterns=include_patterns))
         
-        if filters:
-            for filter in filters:
-                crawl_strategy.add_filter(filter)
+        # Choose strategy
+        if strategy == "dfs":
+            crawl_strategy = DFSDeepCrawlStrategy(
+                max_depth=max_depth,
+                max_pages=max_pages,
+                url_filters=filters
+            )
+        elif strategy == "best_first" and keyword_focus:
+            scorer = KeywordRelevanceScorer(keywords=keyword_focus)
+            crawl_strategy = BestFirstCrawlingStrategy(
+                max_depth=max_depth,
+                max_pages=max_pages,
+                url_filters=filters,
+                scorer=scorer
+            )
+        else:  # Default to BFS
+            crawl_strategy = BFSDeepCrawlStrategy(
+                max_depth=max_depth,
+                max_pages=max_pages,
+                url_filters=filters
+            )
         
-        # Configure crawl
         config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            word_count_threshold=10,
+            verbose=True,
+            cache_mode=CacheMode.ENABLED,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
-        # Start deep crawl
-        crawled_urls = []
-        visited = set()
-        to_visit = [(start_url, 0)]
-        
-        while to_visit and len(crawled_urls) < max_pages:
-            url, depth = to_visit.pop(0)
-            
-            if url in visited or depth > max_depth:
-                continue
-                
-            visited.add(url)
-            
-            # Crawl the URL
-            result = await crawler.arun(url=url, config=config)
-            
+        # Perform deep crawl
+        pages_crawled = []
+        async for result in crawl_strategy.crawl(crawler, start_url, config):
             if result.success:
-                content_id = save_crawled_content(
-                    ctx.request_context.lifespan_context,
-                    url,
-                    result
-                )
-                
-                crawled_urls.append({
-                    "url": url,
-                    "depth": depth,
+                content_id = save_crawled_content(result.url, result)
+                pages_crawled.append({
+                    "url": result.url,
                     "content_id": content_id,
                     "title": result.metadata.get("title", ""),
-                    "links_found": len(result.links.get("internal", []))
+                    "depth": result.metadata.get("depth", 0),
+                    "word_count": len(result.markdown.split())
                 })
-                
-                # Add internal links to queue based on strategy
-                for link in result.links.get("internal", []):
-                    link_url = link.get("href", "")
-                    if link_url and link_url not in visited:
-                        if strategy == "dfs":
-                            to_visit.insert(0, (link_url, depth + 1))
-                        else:
-                            to_visit.append((link_url, depth + 1))
         
         return json.dumps({
             "success": True,
             "start_url": start_url,
-            "strategy": strategy,
-            "pages_crawled": len(crawled_urls),
-            "max_depth_reached": max(c["depth"] for c in crawled_urls) if crawled_urls else 0,
-            "results": crawled_urls
+            "pages_crawled": len(pages_crawled),
+            "max_depth_reached": max(p.get("depth", 0) for p in pages_crawled) if pages_crawled else 0,
+            "results": pages_crawled
         }, indent=2)
         
     except Exception as e:
@@ -685,11 +610,8 @@ async def deep_crawl(
             "error": str(e)
         }, indent=2)
 
-# Extraction tools
-
 @mcp.tool()
 async def extract_structured_data(
-    ctx: Context,
     url: str,
     schema: Dict[str, Any],
     extraction_type: str = "json_css",
@@ -708,9 +630,8 @@ async def extract_structured_data(
         JSON with extracted structured data
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # Create extraction strategy
         if extraction_type == "json_css":
             extraction_strategy = JsonCssExtractionStrategy(
                 schema=schema,
@@ -719,22 +640,25 @@ async def extract_structured_data(
         else:
             return json.dumps({
                 "success": False,
-                "error": f"Unknown extraction type: {extraction_type}"
+                "error": f"Unsupported extraction type: {extraction_type}"
             }, indent=2)
         
         config = CrawlerRunConfig(
             extraction_strategy=extraction_strategy,
-            cache_mode=CacheMode.BYPASS
+            verbose=True
         )
         
         result = await crawler.arun(url=url, config=config)
         
         if result.success:
+            content_id = save_crawled_content(url, result)
+            
             return json.dumps({
                 "success": True,
                 "url": url,
-                "extracted_data": result.extracted_content,
-                "extraction_type": extraction_type
+                "content_id": content_id,
+                "extracted_data": result.extracted_structured_data,
+                "metadata": result.metadata
             }, indent=2)
         else:
             return json.dumps({
@@ -750,7 +674,6 @@ async def extract_structured_data(
 
 @mcp.tool()
 async def extract_with_llm(
-    ctx: Context,
     url: str,
     instruction: str,
     model: str = "gpt-4o-mini",
@@ -773,17 +696,18 @@ async def extract_with_llm(
         JSON with LLM-extracted data
     """
     try:
+        crawler = await get_crawler()
+        
+        # Use environment variable if API key not provided
         if not api_key:
             api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                return json.dumps({
-                    "success": False,
-                    "error": "API key required for LLM extraction"
-                }, indent=2)
         
-        crawler = ctx.request_context.lifespan_context.crawler
+        if not api_key:
+            return json.dumps({
+                "success": False,
+                "error": "OpenAI API key required. Set OPENAI_API_KEY environment variable or provide api_key parameter."
+            }, indent=2)
         
-        # Create LLM extraction strategy with proper configuration
         extraction_strategy = LLMExtractionStrategy(
             provider="openai",
             api_key=api_key,
@@ -795,24 +719,20 @@ async def extract_with_llm(
         
         config = CrawlerRunConfig(
             extraction_strategy=extraction_strategy,
-            cache_mode=CacheMode.BYPASS
+            verbose=True
         )
         
         result = await crawler.arun(url=url, config=config)
         
         if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            content_id = save_crawled_content(url, result)
             
             return json.dumps({
                 "success": True,
                 "url": url,
                 "content_id": content_id,
-                "extracted_content": result.extracted_content,
-                "model_used": model
+                "extracted_data": result.extracted_structured_data or result.extracted_content,
+                "metadata": result.metadata
             }, indent=2)
         else:
             return json.dumps({
@@ -826,11 +746,8 @@ async def extract_with_llm(
             "error": str(e)
         }, indent=2)
 
-# Content filtering tools
-
 @mcp.tool()
 async def crawl_with_filter(
-    ctx: Context,
     url: str,
     filter_type: str = "bm25",
     query: Optional[str] = None,
@@ -851,56 +768,46 @@ async def crawl_with_filter(
         JSON with filtered crawl results
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # Create content filter
         if filter_type == "bm25" and query:
-            content_filter = BM25ContentFilter(
-                user_query=query,
-                threshold=threshold
-            )
+            content_filter = BM25ContentFilter(query=query, threshold=threshold)
         elif filter_type == "pruning":
-            content_filter = PruningContentFilter(
-                min_word_threshold=min_word_threshold
-            )
+            content_filter = PruningContentFilter(threshold=min_word_threshold)
         elif filter_type == "llm":
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 return json.dumps({
                     "success": False,
-                    "error": "API key required for LLM filtering"
+                    "error": "OpenAI API key required for LLM filtering"
                 }, indent=2)
-            
             content_filter = LLMContentFilter(
                 provider="openai",
                 api_key=api_key,
-                model="gpt-4o-mini",
-                relevance_prompt=query or "relevant content"
+                model="gpt-4o-mini"
             )
         else:
             content_filter = None
         
         config = CrawlerRunConfig(
             content_filter=content_filter,
-            cache_mode=CacheMode.BYPASS
+            verbose=True,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
         result = await crawler.arun(url=url, config=config)
         
         if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            content_id = save_crawled_content(url, result)
             
             return json.dumps({
                 "success": True,
                 "url": url,
                 "content_id": content_id,
                 "filter_type": filter_type,
-                "content_length": len(result.markdown) if result.markdown else 0,
-                "filtered": result.content_filter_results if hasattr(result, 'content_filter_results') else None
+                "markdown_length": len(result.markdown),
+                "filtered_content": result.markdown[:1000] + "..." if len(result.markdown) > 1000 else result.markdown,
+                "metadata": result.metadata
             }, indent=2)
         else:
             return json.dumps({
@@ -914,11 +821,8 @@ async def crawl_with_filter(
             "error": str(e)
         }, indent=2)
 
-# Link analysis tools
-
 @mcp.tool()
 async def extract_links(
-    ctx: Context,
     url: str,
     preview_links: bool = False,
     max_preview: int = 10
@@ -935,77 +839,81 @@ async def extract_links(
         JSON with extracted links and optional previews
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        # First crawl to get links
         config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
+            verbose=True,
             exclude_external_links=False,
             exclude_social_media_links=False
         )
         
         result = await crawler.arun(url=url, config=config)
         
-        if not result.success:
-            return json.dumps({
-                "success": False,
-                "error": result.error_message or "Failed to extract links"
-            }, indent=2)
-        
-        response = {
-            "success": True,
-            "url": url,
-            "internal_links": result.links.get("internal", []),
-            "external_links": result.links.get("external", []),
-            "total_internal": len(result.links.get("internal", [])),
-            "total_external": len(result.links.get("external", []))
-        }
-        
-        # Generate link previews if requested
-        if preview_links:
+        if result.success:
+            all_links = []
+            
+            # Combine internal and external links
+            for link_type in ["internal", "external"]:
+                if link_type in result.links:
+                    for link in result.links[link_type]:
+                        all_links.append({
+                            "url": link,
+                            "type": link_type
+                        })
+            
+            # Preview links if requested
             previews = []
-            
-            all_links = result.links.get("internal", [])[:max_preview//2] + \
-                       result.links.get("external", [])[:max_preview//2]
-            
-            for link_data in all_links[:max_preview]:
-                link_url = link_data.get("href", "")
-                if link_url:
+            if preview_links and all_links:
+                preview_count = min(max_preview, len(all_links))
+                for i in range(preview_count):
+                    link_url = all_links[i]["url"]
                     try:
                         preview_result = await crawler.arun(
                             url=link_url,
                             config=CrawlerRunConfig(
-                                cache_mode=CacheMode.ENABLED,
-                                word_count_threshold=50,
-                                screenshot=False
+                                word_count_threshold=10,
+                                verbose=False
                             )
                         )
-                        
                         if preview_result.success:
                             previews.append({
                                 "url": link_url,
                                 "title": preview_result.metadata.get("title", ""),
-                                "description": preview_result.metadata.get("description", "")[:200],
-                                "preview": preview_result.markdown[:500] if preview_result.markdown else ""
+                                "description": preview_result.metadata.get("description", "")
                             })
                     except:
                         pass
             
-            response["link_previews"] = previews
-        
-        return json.dumps(response, indent=2)
-        
+            content_id = save_crawled_content(url, result)
+            
+            response = {
+                "success": True,
+                "url": url,
+                "content_id": content_id,
+                "total_links": len(all_links),
+                "internal_links": len([l for l in all_links if l["type"] == "internal"]),
+                "external_links": len([l for l in all_links if l["type"] == "external"]),
+                "links": all_links[:50]  # Limit to first 50 links in response
+            }
+            
+            if previews:
+                response["previews"] = previews
+            
+            return json.dumps(response, indent=2)
+        else:
+            return json.dumps({
+                "success": False,
+                "error": result.error_message or "Link extraction failed"
+            }, indent=2)
+            
     except Exception as e:
         return json.dumps({
             "success": False,
             "error": str(e)
         }, indent=2)
 
-# Data retrieval tools
-
 @mcp.tool()
 async def get_crawled_content(
-    ctx: Context,
     content_id: str,
     include_html: bool = False,
     include_screenshot: bool = False
@@ -1022,40 +930,44 @@ async def get_crawled_content(
         JSON with the crawled content
     """
     try:
-        context = ctx.request_context.lifespan_context
-        
-        if content_id not in context.crawled_data:
+        if content_id in CRAWLED_DATA:
+            data = CRAWLED_DATA[content_id]
+            result = data["content"]
+            
+            response = {
+                "success": True,
+                "content_id": content_id,
+                "url": data["url"],
+                "markdown": result.markdown,
+                "metadata": result.metadata,
+                "links": result.links
+            }
+            
+            if include_html and result.cleaned_html:
+                response["html"] = result.cleaned_html
+            
+            if include_screenshot and result.screenshot_base64:
+                response["screenshot"] = result.screenshot_base64
+            
+            return json.dumps(response, indent=2)
+        else:
             # Try to load from cache
-            cache_file = context.cache_dir / f"{content_id}.json"
+            cache_file = CACHE_DIR / f"{content_id}.json"
             if cache_file.exists():
                 with open(cache_file, "r") as f:
-                    context.crawled_data[content_id] = json.load(f)
+                    data = json.load(f)
+                return json.dumps({
+                    "success": True,
+                    "content_id": content_id,
+                    "url": data["url"],
+                    "note": "Loaded from cache (limited data available)"
+                }, indent=2)
             else:
                 return json.dumps({
                     "success": False,
-                    "error": f"Content ID {content_id} not found"
+                    "error": f"Content with ID {content_id} not found"
                 }, indent=2)
-        
-        data = context.crawled_data[content_id]
-        result = data["content"]
-        
-        response = {
-            "success": True,
-            "content_id": content_id,
-            "url": data["url"],
-            "markdown": result.markdown if hasattr(result, 'markdown') else "",
-            "metadata": result.metadata if hasattr(result, 'metadata') else {},
-            "media": result.media if hasattr(result, 'media') else {}
-        }
-        
-        if include_html and hasattr(result, 'html'):
-            response["html"] = result.html
-            
-        if include_screenshot and hasattr(result, 'screenshot_data'):
-            response["screenshot_data"] = result.screenshot_data
-        
-        return json.dumps(response, indent=2, default=str)
-        
+                
     except Exception as e:
         return json.dumps({
             "success": False,
@@ -1063,7 +975,7 @@ async def get_crawled_content(
         }, indent=2)
 
 @mcp.tool()
-async def list_crawled_content(ctx: Context) -> str:
+async def list_crawled_content() -> str:
     """
     List all crawled content in the current session
     
@@ -1071,36 +983,37 @@ async def list_crawled_content(ctx: Context) -> str:
         JSON with list of all crawled content
     """
     try:
-        context = ctx.request_context.lifespan_context
+        contents = []
         
-        content_list = []
-        for content_id, data in context.crawled_data.items():
-            content_list.append({
+        # From memory
+        for content_id, data in CRAWLED_DATA.items():
+            contents.append({
                 "content_id": content_id,
                 "url": data["url"],
-                "timestamp": data.get("timestamp", 0)
+                "timestamp": data["timestamp"],
+                "source": "memory"
             })
         
-        # Also check cache directory
-        for cache_file in context.cache_dir.glob("*.json"):
+        # From cache files
+        for cache_file in CACHE_DIR.glob("*.json"):
             content_id = cache_file.stem
-            if content_id not in context.crawled_data:
+            if content_id not in CRAWLED_DATA:
                 try:
                     with open(cache_file, "r") as f:
                         data = json.load(f)
-                        content_list.append({
-                            "content_id": content_id,
-                            "url": data.get("url", ""),
-                            "timestamp": data.get("timestamp", 0),
-                            "from_cache": True
-                        })
+                    contents.append({
+                        "content_id": content_id,
+                        "url": data.get("url", "unknown"),
+                        "timestamp": data.get("timestamp", 0),
+                        "source": "cache"
+                    })
                 except:
                     pass
         
         return json.dumps({
             "success": True,
-            "total_items": len(content_list),
-            "content": content_list
+            "total_items": len(contents),
+            "contents": contents
         }, indent=2)
         
     except Exception as e:
@@ -1109,11 +1022,8 @@ async def list_crawled_content(ctx: Context) -> str:
             "error": str(e)
         }, indent=2)
 
-# Advanced crawling features
-
 @mcp.tool()
 async def crawl_with_js_execution(
-    ctx: Context,
     url: str,
     js_code: Optional[str] = None,
     wait_for_js: Optional[str] = None,
@@ -1132,36 +1042,39 @@ async def crawl_with_js_execution(
         JSON with crawl results after JS execution
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
         config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            js_code=js_code,  # Fixed parameter name
-            wait_for=wait_for_js,  # Changed from wait_for_js to wait_for
-            page_timeout=js_timeout  # Changed from js_timeout to page_timeout
+            js_code=js_code,
+            wait_for=wait_for_js or "body",
+            page_timeout=js_timeout,
+            verbose=True,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
         result = await crawler.arun(url=url, config=config)
         
         if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            content_id = save_crawled_content(url, result)
             
-            return json.dumps({
+            response = {
                 "success": True,
                 "url": url,
                 "content_id": content_id,
                 "js_executed": bool(js_code),
-                "content_length": len(result.markdown) if result.markdown else 0,
-                "title": result.metadata.get("title", "")
-            }, indent=2)
+                "markdown": result.markdown[:1000] + "..." if len(result.markdown) > 1000 else result.markdown,
+                "metadata": result.metadata
+            }
+            
+            # If JS was executed and returned a value
+            if js_code and "js_result" in result.__dict__:
+                response["js_result"] = str(result.js_result)
+            
+            return json.dumps(response, indent=2)
         else:
             return json.dumps({
                 "success": False,
-                "error": result.error_message or "JS crawl failed"
+                "error": result.error_message or "JS execution crawl failed"
             }, indent=2)
             
     except Exception as e:
@@ -1172,7 +1085,6 @@ async def crawl_with_js_execution(
 
 @mcp.tool()
 async def crawl_dynamic_content(
-    ctx: Context,
     url: str,
     scroll: bool = True,
     scroll_delay: int = 1000,
@@ -1193,43 +1105,54 @@ async def crawl_dynamic_content(
         JSON with dynamically loaded content
     """
     try:
-        crawler = ctx.request_context.lifespan_context.crawler
+        crawler = await get_crawler()
         
-        js_script = None
-        if scroll:
-            js_script = f"""
-            async function scrollPage() {{
-                for(let i = 0; i < {max_scrolls}; i++) {{
-                    window.scrollTo(0, document.body.scrollHeight);
-                    await new Promise(resolve => setTimeout(resolve, {scroll_delay}));
+        # JavaScript to handle scrolling
+        scroll_js = f"""
+        (async () => {{
+            let scrollCount = 0;
+            const maxScrolls = {max_scrolls};
+            const scrollDelay = {scroll_delay};
+            
+            while (scrollCount < maxScrolls) {{
+                const prevHeight = document.body.scrollHeight;
+                window.scrollTo(0, document.body.scrollHeight);
+                
+                await new Promise(r => setTimeout(r, scrollDelay));
+                
+                const newHeight = document.body.scrollHeight;
+                if (newHeight === prevHeight) {{
+                    // No new content loaded
+                    break;
                 }}
+                
+                scrollCount++;
             }}
-            await scrollPage();
-            """
+            
+            return scrollCount;
+        }})();
+        """ if scroll else None
         
         config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            js_code=js_script,  # Fixed parameter name
-            wait_for=wait_for_selector,
-            word_count_threshold=10
+            js_code=scroll_js,
+            wait_for=wait_for_selector or "body",
+            verbose=True,
+            markdown_generator=DefaultMarkdownGenerator()
         )
         
         result = await crawler.arun(url=url, config=config)
         
         if result.success:
-            content_id = save_crawled_content(
-                ctx.request_context.lifespan_context,
-                url,
-                result
-            )
+            content_id = save_crawled_content(url, result)
             
             return json.dumps({
                 "success": True,
                 "url": url,
                 "content_id": content_id,
-                "scrolling_applied": scroll,
-                "content_length": len(result.markdown) if result.markdown else 0,
-                "title": result.metadata.get("title", "")
+                "scrolling_enabled": scroll,
+                "markdown_length": len(result.markdown),
+                "content": result.markdown[:2000] + "..." if len(result.markdown) > 2000 else result.markdown,
+                "metadata": result.metadata
             }, indent=2)
         else:
             return json.dumps({
