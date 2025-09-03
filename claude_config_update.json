@@ -1,0 +1,13 @@
+{
+  "crawl4ai": {
+    "type": "stdio",
+    "command": "python3",
+    "args": [
+      "/Users/vivmagarwal/Work/IB/TOK.net/mcp-crawl4ai/server.py"
+    ],
+    "env": {
+      "PYTHONPATH": "/Users/vivmagarwal/Work/IB/TOK.net/mcp-crawl4ai",
+      "OPENAI_API_KEY": ""
+    }
+  }
+}

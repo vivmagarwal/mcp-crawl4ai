@@ -41,9 +41,8 @@ function checkPythonPackages(pythonCmd) {
   console.log('\n📚 Checking Python dependencies...');
   
   const requiredPackages = [
-    'mcp',
+    'fastmcp',
     'crawl4ai',
-    'httpx',
     'python-dotenv'
   ];
   
@@ -70,8 +69,8 @@ function checkPythonPackages(pythonCmd) {
         try {
           if (pkg === 'crawl4ai') {
             execSync(`${pythonCmd} -m pip install crawl4ai>=0.6.0 --quiet`, { stdio: 'inherit' });
-          } else if (pkg === 'mcp') {
-            execSync(`${pythonCmd} -m pip install mcp>=1.7.0 --quiet`, { stdio: 'inherit' });
+          } else if (pkg === 'fastmcp') {
+            execSync(`${pythonCmd} -m pip install fastmcp>=2.12.0 --quiet`, { stdio: 'inherit' });
           } else {
             execSync(`${pythonCmd} -m pip install ${pkg} --quiet`, { stdio: 'inherit' });
           }
