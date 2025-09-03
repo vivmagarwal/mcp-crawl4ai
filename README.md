@@ -1,22 +1,32 @@
 # MCP Crawl4AI Server
 
-A comprehensive Model Context Protocol (MCP) server that provides full access to Crawl4AI's powerful web scraping and crawling capabilities through Claude Desktop/Code. Supports authentication for login-protected sites.
+🚀 A powerful Model Context Protocol (MCP) server that brings advanced web scraping capabilities to Claude Desktop. Built on top of [Crawl4AI](https://github.com/unclecode/crawl4ai), this server enables Claude to crawl websites, extract structured data, handle authentication, and process dynamic content.
+
+[![GitHub](https://img.shields.io/badge/GitHub-mcp--crawl4ai-blue)](https://github.com/vivmagarwal/mcp-crawl4ai)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org)
 
 ## Features
 
-### Core Crawling
+### 🔐 Authentication Support
+- **Login Handling** - Automatically login to protected sites
+- **Session Management** - Maintain authenticated sessions
+- **Custom Selectors** - Configure login form selectors
+- **Multi-strategy Login** - Smart detection of login fields
+
+### 🕷️ Core Crawling
 - **Single URL Crawling** - Advanced single page scraping with screenshots, PDFs, and browser control
 - **Batch Crawling** - Parallel crawling of multiple URLs with memory management
 - **Deep Crawling** - Recursive crawling with BFS, DFS, and best-first strategies
 - **Dynamic Content** - Handle JavaScript-heavy sites with scrolling and JS execution
 
-### Data Extraction
+### 📊 Data Extraction
 - **Structured Extraction** - CSS and XPath selectors for precise data extraction
 - **LLM Extraction** - Use GPT-4, Claude, or other models to extract semantic information
 - **Link Analysis** - Extract and preview all internal/external links
 - **Content Filtering** - BM25, LLM-based, and threshold filtering
 
-### Advanced Features
+### ⚡ Advanced Features
 - **JavaScript Execution** - Run custom JS code during crawling
 - **Dynamic Loading** - Handle infinite scroll and AJAX content
 - **Caching System** - Persistent storage of crawled content
