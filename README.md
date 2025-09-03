@@ -34,30 +34,37 @@
 
 ## Installation for Claude Desktop
 
-### Step 1: Prerequisites
-- Python 3.10 or higher
-- Node.js (for some MCP features)
-- Chrome/Chromium browser
+### Quick Install (Recommended)
 
-### Step 2: Clone and Install
+The easiest way to install MCP Crawl4AI is using the `claude mcp add` command:
 
 ```bash
-# Clone the repository
-git clone https://github.com/vivmagarwal/mcp-crawl4ai.git
-cd mcp-crawl4ai
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
-
-# Install Playwright browsers (required)
-playwright install chromium
+claude mcp add crawl4ai --scope user -- npx -y mcp-crawl4ai
 ```
 
-### Step 3: Configure Claude Desktop
+This will automatically:
+- Download and configure the MCP server
+- Install Python dependencies (if pip is available)
+- Set up the server for use across all your projects
+
+### Manual Installation
+
+#### Step 1: Prerequisites
+- Python 3.10 or higher
+- Node.js 16+ (for npx)
+- Chrome/Chromium browser
+
+#### Step 2: Install via NPM
+
+```bash
+# Install globally via npm
+npm install -g mcp-crawl4ai
+
+# Or run directly with npx (no installation)
+npx mcp-crawl4ai
+```
+
+#### Step 3: Configure Claude Desktop
 
 1. **Find your Claude configuration file:**
    - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -69,7 +76,23 @@ playwright install chromium
 ```json
 {
   "mcpServers": {
-    "mcp-crawl4ai": {
+    "crawl4ai": {
+      "command": "npx",
+      "args": ["-y", "mcp-crawl4ai"],
+      "env": {
+        "OPENAI_API_KEY": "sk-your-key-here"
+      }
+    }
+  }
+}
+```
+
+For local development, you can also point directly to the Python server:
+
+```json
+{
+  "mcpServers": {
+    "crawl4ai-local": {
       "command": "python3",
       "args": ["/absolute/path/to/mcp-crawl4ai/server.py"],
       "env": {
@@ -80,8 +103,6 @@ playwright install chromium
 }
 ```
 
-⚠️ **Important:** Replace `/absolute/path/to/mcp-crawl4ai/server.py` with the actual path to your server.py file.
-
 ### Step 4: Restart Claude Desktop
 
 1. Completely quit Claude Desktop (not just close the window)
@@ -89,29 +110,11 @@ playwright install chromium
 3. Look for the MCP server indicator (🔌) in the bottom-right of the input box
 4. Click the indicator to verify "mcp-crawl4ai" is connected
 
-## Configuration with Authentication
-
-For sites requiring login, the server supports authentication:
-
-```json
-{
-  "mcpServers": {
-    "mcp-crawl4ai": {
-      "command": "python3",
-      "args": ["/path/to/mcp-crawl4ai/server.py"],
-      "env": {
-        "OPENAI_API_KEY": "sk-your-key",
-        "DEFAULT_USERNAME": "your-username",
-        "DEFAULT_PASSWORD": "your-password"
-      }
-    }
-  }
-}
-```
+## Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the project directory:
+Configure API keys and credentials in your Claude Desktop config or `.env` file:
 
 ```env
 # Optional: For LLM-based features

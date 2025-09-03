@@ -1,0 +1,40 @@
+{
+  "name": "mcp-crawl4ai",
+  "version": "1.0.0",
+  "description": "MCP server for advanced web scraping with Crawl4AI - supports authentication, dynamic content, and AI extraction",
+  "keywords": [
+    "mcp",
+    "crawl4ai",
+    "web-scraping",
+    "authentication",
+    "claude-code",
+    "model-context-protocol"
+  ],
+  "author": "Viv Magarwal",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vivmagarwal/mcp-crawl4ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vivmagarwal/mcp-crawl4ai/issues"
+  },
+  "homepage": "https://github.com/vivmagarwal/mcp-crawl4ai#readme",
+  "bin": {
+    "mcp-crawl4ai": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "server.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
