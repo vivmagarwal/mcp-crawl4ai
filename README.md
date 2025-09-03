@@ -2,9 +2,11 @@
 
 🚀 A powerful Model Context Protocol (MCP) server that brings advanced web scraping capabilities to Claude Desktop. Built on top of [Crawl4AI](https://github.com/unclecode/crawl4ai), this server enables Claude to crawl websites, extract structured data, handle authentication, and process dynamic content.
 
+[![npm version](https://img.shields.io/npm/v/mcp-crawl4ai)](https://www.npmjs.com/package/mcp-crawl4ai)
 [![GitHub](https://img.shields.io/badge/GitHub-mcp--crawl4ai-blue)](https://github.com/vivmagarwal/mcp-crawl4ai)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple)](https://modelcontextprotocol.io)
 
 ## Features
 
@@ -32,14 +34,26 @@
 - **Caching System** - Persistent storage of crawled content
 - **Memory Management** - Adaptive memory control for large-scale crawling
 
-## Installation for Claude Desktop
+## Quick Start
 
-### Quick Install (Recommended)
-
-The easiest way to install MCP Crawl4AI is using the `claude mcp add` command:
+### Install with Claude Desktop (One Command!)
 
 ```bash
 claude mcp add crawl4ai --scope user -- npx -y mcp-crawl4ai
+```
+
+That's it! The server will be available in all your Claude Desktop conversations.
+
+## Detailed Installation
+
+### Method 1: Using `claude mcp add` (Recommended)
+
+```bash
+# Install for all projects (recommended)
+claude mcp add crawl4ai --scope user -- npx -y mcp-crawl4ai
+
+# Or install for current project only
+claude mcp add crawl4ai -- npx -y mcp-crawl4ai
 ```
 
 This will automatically:
@@ -47,24 +61,14 @@ This will automatically:
 - Install Python dependencies (if pip is available)
 - Set up the server for use across all your projects
 
-### Manual Installation
+### Method 2: Manual Configuration
 
-#### Step 1: Prerequisites
+#### Prerequisites
 - Python 3.10 or higher
 - Node.js 16+ (for npx)
 - Chrome/Chromium browser
 
-#### Step 2: Install via NPM
-
-```bash
-# Install globally via npm
-npm install -g mcp-crawl4ai
-
-# Or run directly with npx (no installation)
-npx mcp-crawl4ai
-```
-
-#### Step 3: Configure Claude Desktop
+#### Configure Claude Desktop
 
 1. **Find your Claude configuration file:**
    - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
